@@ -9,6 +9,8 @@ export interface Player {
   has_guessed_this_round: boolean;
   correct_guesses: number;
   times_as_drawer: number;
+  total_guess_time: number;
+  successful_guess_count: number;
 }
 
 export interface Room {
@@ -25,6 +27,9 @@ export interface Room {
   created_at: string;
   drawer_awarded_this_round: boolean;
   round_ending: boolean;
+  word_list: string[];
+  current_word_index: number;
+  turn_started_at: string | null;
 }
 
 export interface DrawingStroke {

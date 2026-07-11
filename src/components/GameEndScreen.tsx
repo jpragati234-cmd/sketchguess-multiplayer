@@ -1,4 +1,4 @@
-import { Trophy, RotateCcw, LogOut, Crown, Medal, Target, Pencil, PartyPopper } from 'lucide-react';
+import { Trophy, RotateCcw, LogOut, Crown, Medal, Target, Pencil, PartyPopper, Clock } from 'lucide-react';
 import { Room, Player } from '../lib/types';
 
 interface GameEndScreenProps {
@@ -70,19 +70,20 @@ export default function GameEndScreen({
           </h2>
 
           {/* Column headers */}
-          <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-x-3 sm:gap-x-6 px-3 pb-2 mb-2 border-b border-dark-600 text-xs text-gray-400 uppercase tracking-wide">
+          <div className="grid grid-cols-[auto_1fr_auto_auto_auto_auto] gap-x-3 sm:gap-x-6 px-3 pb-2 mb-2 border-b border-dark-600 text-xs text-gray-400 uppercase tracking-wide">
             <span className="w-8 text-center">Rank</span>
             <span>Player</span>
             <span className="text-right w-16">Score</span>
             <span className="text-right w-14 hidden sm:block">Guesses</span>
             <span className="text-right w-14 hidden sm:block">Draws</span>
+            <span className="text-right w-16 hidden sm:block">Avg Time</span>
           </div>
 
           <div className="space-y-2">
             {sortedPlayers.map((player, index) => (
               <div
                 key={player.id}
-                className={`grid grid-cols-[auto_1fr_auto_auto_auto] gap-x-3 sm:gap-x-6 items-center p-3 rounded-xl transition-all ${
+                className={`grid grid-cols-[auto_1fr_auto_auto_auto_auto] gap-x-3 sm:gap-x-6 items-center p-3 rounded-xl transition-all ${
                   index === 0
                     ? 'bg-gradient-to-br from-yellow-500/20 to-yellow-600/10 border border-yellow-500/50'
                     : index === 1
@@ -144,13 +145,25 @@ export default function GameEndScreen({
                     <span className="text-sm font-medium">{player.times_as_drawer}</span>
                   </div>
                 </div>
+
+                {/* Average Guess Time */}
+                <div className="text-right w-16 hidden sm:block">
+                  <div className="flex items-center justify-end gap-1 text-gray-100">
+                    <Clock className="w-3 h-3 text-accent-green" />
+                    <span className="text-sm font-medium">
+                      {player.successful_guess_count > 0
+                        ? (player.total_guess_time / player.successful_guess_count / 1000).toFixed(1) + 's'
+                        : '--'}
+                    </span>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
 
           {/* Mobile-only stats note */}
           <p className="text-xs text-gray-400 mt-3 sm:hidden text-center">
-            Stats shown on desktop view
+            Guesses, draws, and avg time shown on desktop view
           </p>
         </div>
 

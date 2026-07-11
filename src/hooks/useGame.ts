@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { Player, Room, ChatMessage, WORDS, ROUND_DURATION, ROUND_ENDING_DURATION } from '../lib/types';
+import { Player, Room, ChatMessage, ROUND_DURATION, ROUND_ENDING_DURATION } from '../lib/types';
 import { generateRoomCode, getPlayerId, getNickname, setNickname as setStoredNickname } from '../lib/utils';
 
 interface DrawingStroke {
@@ -22,13 +22,51 @@ export function useGame() {
   const advanceLockRef = useRef(false);
   const lastDrawerRef = useRef<string | null>(null);
 
+  // ─── advanceGameState (host-only authoritative transition) ───
+  // Called from exactly two places: timer expiry and all-guessed.
+  // The lock prevents duplicate transitions.
+  const advanceGameState = useCallback(async (roomId: string, reason: 'CORRECT_GUESS' | 'TIMER_EXPIRED') => {
+    if (advanceLockRef.current) return;
+    advanceLockRef.current = true;
+
+    console.log('[WORD] Transition reason:', reason);
+
+    try {
+      // Set round_ending + time_remaining=0 so all clients see the transition
+      await supabase.from('rooms')
+        .update({ round_ending: true, time_remaining: 0 })
+        .eq('id', roomId);
+
+      // Wait 3 seconds for the word-reveal overlay
+      await new Promise((r) => setTimeout(r, ROUND_ENDING_DURATION * 1000));
+
+      // Advance: the RPC picks the next word from the shuffled word_list
+      const { data, error } = await supabase.rpc('advance_round', { p_room_id: roomId });
+      if (error) {
+        console.error('[TURN] advance_round error:', error);
+      } else if (data) {
+        const result = data as { advanced: boolean; game_ended: boolean; new_round?: number; new_drawer_id?: string };
+        console.log('[TURN] Advanced:', result);
+        if (result.game_ended) {
+          console.log('[GAME] All rounds completed');
+          console.log('[GAME] Game ended');
+        }
+      }
+    } finally {
+      advanceLockRef.current = false;
+    }
+  }, []);
+
   // ─── Create Room ──────────────────────────────────────────────
   const createRoom = useCallback(async (nickname: string) => {
     setIsLoading(true);
     setError(null);
     setStoredNickname(nickname);
 
+    console.log('[ROOM] Creating room');
+
     try {
+      // Clean up any stale player record with this ID
       await supabase.from('players').delete().eq('id', currentPlayerId);
 
       const code = generateRoomCode();
@@ -59,6 +97,9 @@ export function useGame() {
         .update({ host_id: currentPlayerId })
         .eq('id', roomData.id);
 
+      console.log('[ROOM] Room created:', roomData.id);
+      console.log('[ROOM] Room code:', code);
+
       setRoom({ ...roomData, host_id: currentPlayerId });
       setPlayers([{
         id: currentPlayerId,
@@ -71,10 +112,13 @@ export function useGame() {
         has_guessed_this_round: false,
         correct_guesses: 0,
         times_as_drawer: 0,
+        total_guess_time: 0,
+        successful_guess_count: 0,
       }]);
 
       localStorage.setItem('sketchguess_room_id', roomData.id);
     } catch (err) {
+      console.error('[ROOM] Create room error:', err);
       setError(err instanceof Error ? err.message : 'Failed to create room');
     } finally {
       setIsLoading(false);
@@ -133,6 +177,7 @@ export function useGame() {
       setPlayers((allPlayers || []) as Player[]);
       localStorage.setItem('sketchguess_room_id', roomData.id);
     } catch (err) {
+      console.error('[ROOM] Join room error:', err);
       setError(err instanceof Error ? err.message : 'Failed to join room');
     } finally {
       setIsLoading(false);
@@ -193,30 +238,15 @@ export function useGame() {
 
     advanceLockRef.current = false;
 
-    const shuffled = [...players].sort(() => Math.random() - 0.5);
-    const firstDrawer = shuffled[0];
-    const word = WORDS[Math.floor(Math.random() * WORDS.length)];
+    const { error } = await supabase.rpc('start_game', { p_room_id: room.id });
+    if (error) {
+      console.error('[ROUND] start_game error:', error);
+      setError('Failed to start game');
+      return;
+    }
 
-    await supabase.from('players')
-      .update({ score: 0, has_guessed_this_round: false, is_drawer: false, correct_guesses: 0, times_as_drawer: 0 })
-      .eq('room_id', room.id);
-
-    await supabase.from('players')
-      .update({ is_drawer: true, times_as_drawer: 1 })
-      .eq('id', firstDrawer.id);
-
-    await supabase.from('drawing_strokes').delete().eq('room_id', room.id);
-    await supabase.from('messages').delete().eq('room_id', room.id);
-
-    await supabase.from('rooms').update({
-      status: 'playing',
-      round_number: 1,
-      current_word: word,
-      time_remaining: ROUND_DURATION,
-      current_drawer_id: firstDrawer.id,
-      drawer_awarded_this_round: false,
-      round_ending: false,
-    }).eq('id', room.id);
+    console.log('[ROUND] Advancing to: 1');
+    console.log('[ROUND] Word list reset');
 
     setDrawingData([]);
     setMessages([]);
@@ -230,30 +260,15 @@ export function useGame() {
 
     advanceLockRef.current = false;
 
-    const shuffled = [...players].sort(() => Math.random() - 0.5);
-    const firstDrawer = shuffled[0];
-    const word = WORDS[Math.floor(Math.random() * WORDS.length)];
+    const { error } = await supabase.rpc('start_game', { p_room_id: room.id });
+    if (error) {
+      console.error('[ROUND] play_again error:', error);
+      return;
+    }
 
-    await supabase.from('players')
-      .update({ score: 0, has_guessed_this_round: false, is_drawer: false, correct_guesses: 0, times_as_drawer: 0 })
-      .eq('room_id', room.id);
-
-    await supabase.from('players')
-      .update({ is_drawer: true, times_as_drawer: 1 })
-      .eq('id', firstDrawer.id);
-
-    await supabase.from('drawing_strokes').delete().eq('room_id', room.id);
-    await supabase.from('messages').delete().eq('room_id', room.id);
-
-    await supabase.from('rooms').update({
-      status: 'playing',
-      round_number: 1,
-      current_word: word,
-      time_remaining: ROUND_DURATION,
-      current_drawer_id: firstDrawer.id,
-      drawer_awarded_this_round: false,
-      round_ending: false,
-    }).eq('id', room.id);
+    console.log('[ROUND] Round completed:', room.round_number);
+    console.log('[ROUND] Advancing to: 1');
+    console.log('[ROUND] Word list reset');
 
     setDrawingData([]);
     setMessages([]);
@@ -312,7 +327,7 @@ export function useGame() {
     });
 
     if (error) {
-      console.error('submit_guess error:', error);
+      console.error('[GUESS] submit_guess error:', error);
       return;
     }
 
@@ -320,16 +335,11 @@ export function useGame() {
 
     if (result.is_correct && result.all_guessed && !room.round_ending) {
       const currentPlayer = players.find((p) => p.id === currentPlayerId);
-      if (currentPlayer?.is_host && !advanceLockRef.current) {
-        advanceLockRef.current = true;
-        await supabase.from('rooms').update({ round_ending: true, time_remaining: 0 }).eq('id', room.id);
-        await new Promise((r) => setTimeout(r, ROUND_ENDING_DURATION * 1000));
-        const newWord = WORDS[Math.floor(Math.random() * WORDS.length)];
-        await supabase.rpc('advance_round', { p_room_id: room.id, p_new_word: newWord });
-        advanceLockRef.current = false;
+      if (currentPlayer?.is_host) {
+        await advanceGameState(room.id, 'CORRECT_GUESS');
       }
     }
-  }, [room, players, currentPlayerId]);
+  }, [room, players, currentPlayerId, advanceGameState]);
 
   // ─── Send Draw Stroke ─────────────────────────────────────────
   const sendDraw = useCallback(async (points: { x: number; y: number }[], color: string, brushSize: number) => {
@@ -356,9 +366,9 @@ export function useGame() {
     setDrawingData([]);
   }, [room, players, currentPlayerId]);
 
-  // ─── Global Timer (Host Only) ─────────────────────────────────
+  // ─── Host Timer (authoritative, single interval) ──────────────
   useEffect(() => {
-    if (!room || room.status !== 'playing') {
+    if (!room || room.status !== 'playing' || room.round_ending) {
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
@@ -369,17 +379,13 @@ export function useGame() {
     const currentPlayer = players.find((p) => p.id === currentPlayerId);
     if (!currentPlayer?.is_host) return;
 
-    if (room.round_ending) {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      return;
-    }
-
+    // Clear any existing interval before starting a new one
     if (timerRef.current) {
       clearInterval(timerRef.current);
+      timerRef.current = null;
     }
+
+    console.log('[TIMER] Started:', room.time_remaining);
 
     timerRef.current = setInterval(async () => {
       const { data: latest, error } = await supabase
@@ -405,25 +411,17 @@ export function useGame() {
       }
 
       const newTime = latest.time_remaining - 1;
+      console.log('[TIMER] Remaining:', newTime);
 
       if (newTime <= 0) {
+        console.log('[TIMER] Expired');
+
         if (timerRef.current) {
           clearInterval(timerRef.current);
           timerRef.current = null;
         }
 
-        if (advanceLockRef.current) return;
-        advanceLockRef.current = true;
-
-        await supabase.from('rooms')
-          .update({ time_remaining: 0, round_ending: true })
-          .eq('id', room.id);
-
-        await new Promise((r) => setTimeout(r, ROUND_ENDING_DURATION * 1000));
-
-        const newWord = WORDS[Math.floor(Math.random() * WORDS.length)];
-        await supabase.rpc('advance_round', { p_room_id: room.id, p_new_word: newWord });
-        advanceLockRef.current = false;
+        await advanceGameState(room.id, 'TIMER_EXPIRED');
         return;
       }
 
@@ -438,26 +436,10 @@ export function useGame() {
         timerRef.current = null;
       }
     };
-  }, [room?.id, room?.status, room?.round_ending, room?.round_number, room?.current_drawer_id, players, currentPlayerId]);
-
-  // ─── Stuck Round Recovery ────────────────────────────────────
-  useEffect(() => {
-    if (!room || room.status !== 'playing' || !room.round_ending) return;
-    if (room.time_remaining > 0) return;
-
-    const currentPlayer = players.find((p) => p.id === currentPlayerId);
-    if (!currentPlayer?.is_host) return;
-    if (advanceLockRef.current) return;
-
-    advanceLockRef.current = true;
-    const timeout = setTimeout(async () => {
-      const newWord = WORDS[Math.floor(Math.random() * WORDS.length)];
-      await supabase.rpc('advance_round', { p_room_id: room.id, p_new_word: newWord });
-      advanceLockRef.current = false;
-    }, ROUND_ENDING_DURATION * 1000);
-
-    return () => clearTimeout(timeout);
-  }, [room?.id, room?.status, room?.round_ending, room?.time_remaining, players, currentPlayerId]);
+    // Only depend on room id, status, and round_ending — NOT on players
+    // or currentPlayerId (those change when players join/leave but the
+    // timer should keep running).
+  }, [room?.id, room?.status, room?.round_ending, advanceGameState]);
 
   // ─── Realtime Subscriptions ───────────────────────────────────
   useEffect(() => {
@@ -471,6 +453,8 @@ export function useGame() {
         (payload) => {
           const newRoom = payload.new as Room;
           if (newRoom.current_drawer_id !== lastDrawerRef.current) {
+            console.log('[TURN] Previous drawer:', lastDrawerRef.current);
+            console.log('[TURN] New drawer:', newRoom.current_drawer_id);
             lastDrawerRef.current = newRoom.current_drawer_id;
             setDrawingData([]);
             setMessages([]);
