@@ -66,7 +66,7 @@ export interface GameState {
   timeRemaining: number;
 }
 
-export const MIN_PLAYERS_OPTIONS = [2, 3, 4, 5, 6, 8];
+export const MIN_PLAYERS_OPTIONS = [1, 2, 3, 4, 5, 9, 10];
 export const MAX_ROUNDS_OPTIONS = [1, 3, 5, 7, 10];
 
 export const WORDS = [
